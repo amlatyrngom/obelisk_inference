@@ -819,14 +819,20 @@ dependencies = [
  "aws-sdk-ecrpublic",
  "aws-sdk-ecs",
  "aws-sdk-efs",
+ "aws-sdk-iam",
  "aws-sdk-lambda",
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "aws-smithy-types",
  "aws-types",
+ "base64 0.21.0",
+ "bincode",
  "chrono",
+ "r2d2",
+ "r2d2_sqlite",
  "reqwest",
  "rsntp",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
@@ -1011,7 +1017,6 @@ dependencies = [
  "aws-types",
  "common",
  "functional",
- "messaging",
  "microbench",
  "persistence",
  "proc-macro2",
@@ -1139,8 +1144,11 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-lambda",
+ "aws-sdk-s3",
  "aws-smithy-types",
  "aws-types",
+ "base64 0.21.0",
+ "bincode",
  "chrono",
  "common",
  "rand",
@@ -1148,6 +1156,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1680,37 +1689,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "messaging"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "aws-config",
- "aws-sdk-ecs",
- "aws-sdk-lambda",
- "aws-sdk-s3",
- "aws-sdk-sqs",
- "aws-smithy-types",
- "aws-types",
- "bincode",
- "chrono",
- "common",
- "persistence",
- "rand",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "microbench"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "common",
  "functional",
- "messaging",
  "persistence",
  "serde",
  "serde_json",
@@ -1841,7 +1825,6 @@ dependencies = [
  "functional",
  "lambda_runtime",
  "lazy_static",
- "messaging",
  "microbench",
  "persistence",
  "serde_json",
