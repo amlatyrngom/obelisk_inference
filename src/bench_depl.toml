@@ -1,7 +1,0 @@
-namespace = "benchinfer"
-
-[functional]
-path = "inference::BenchFn"
-mem_size = 512
-timeout = 10
-concurrency = 10

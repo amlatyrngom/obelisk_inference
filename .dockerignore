@@ -1,3 +1,5 @@
 **/target
 **/obelisk_shared_data
 **/venv
+**/transformers
+**/dependencies

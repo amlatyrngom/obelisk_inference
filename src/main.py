@@ -1,39 +1,55 @@
 import sys
 import os
+import time
 
 print(f"CWD: {os.getcwd()}")
-
+os.environ["TRANSFORMERS_CACHE"] = "/tmp/transformers"
 if os.path.exists("venv"):
     curr_dir = os.getcwd()
     version = f"{sys.version_info.major}.{sys.version_info.minor}"
     sys.path.append(f"{curr_dir}/venv/lib/python{version}/site-packages")
     print(f"New Path: {sys.path}")
 
-import torch
-import numpy as np
-from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
-from torchvision.transforms import ToTensor
+print(f"Model Files Before: {os.listdir('./transformers/qamodel')}")
 
-torch.hub.set_dir("/tmp/torch")
-weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1
-preprocess = weights.transforms(antialias=True)
-model = mobilenet_v3_small(weights=weights)
-to_tensor = ToTensor()
-model.eval()
+from transformers import pipeline
+# question_answerer = pipeline("question-answering", model='distilbert-base-uncased-distilled-squad')
+question_answerer = pipeline("question-answering", model='./transformers/qamodel')
+print(f"Model Files After: {os.listdir('./transformers/qamodel')}")
+# print(f"Cache Files After: {os.listdir(os.environ['TRANSFORMERS_CACHE'])}")
+
 
 def main(*args):
-    # Read input
-    batch = []
     args = args[0]
-    for (img, width, height) in args:
-        img = np.frombuffer(img, dtype=np.uint8) # TODO: Find a way to optimize this part.
-        img.resize((height, width, 3))
-        img = to_tensor(img.copy())
-        batch.append(preprocess(img))    
-    batch = torch.stack(batch)
-    # Predict.
-    predictions = model(batch)
-    # Return best candidates.
-    class_ids = predictions.argmax(dim=1).tolist()
-    category_names = [weights.meta["categories"][class_id] for class_id in class_ids]
-    return category_names
+    print(f"Args: {args}")
+    model_input = [{"context": context, "question": question} for (context, question) in args]
+    print(f"Model Input: {model_input}")
+    t1 = time.time()
+    answers = question_answerer(model_input)
+    t2 = time.time()
+    print(f"Infer Time: {(t2 - t1) * 1000}ms")
+    print(f"Answers: {answers}")
+    if not isinstance(answers, list):
+        # Special case with one input.
+        answers = [answers]
+    answers = [answer["answer"] for answer in answers]
+    print(f"Answers: {answers}")
+    return answers
+    
+if __name__ == "__main__":
+    result = question_answerer([
+    {
+        "question": "Who is boss?",
+        "context": "Amadou is boss!"
+    },
+    {
+        "question": "Who is boss?",
+        "context": "Amadou is boss!"
+    }
+    ])
+    print("AAAAA")
+    print(result)
+    print("AAAAA")
+
+    result = question_answerer(question="Who is the boss?", context="Amadou is the boss")
+    print(result["answer"])

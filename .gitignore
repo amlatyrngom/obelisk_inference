@@ -3,3 +3,6 @@
 **/obelisk_shared_data
 pitch.md
 **/venv
+**/transformers
+**/dependencies
+**/obelisk_local_data

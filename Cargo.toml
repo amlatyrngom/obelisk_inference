@@ -9,15 +9,13 @@ tokio = { version = "*", features = ["full"] }
 async-trait = "*"
 serde_json = "*"
 serde = {version="*", features = ["derive"]}
-base64 = "0.21"
-image = "*"
-which = "*"
 obelisk = {path="./obelisk"}
 obelisk_deployment = {package="deployment", path="./obelisk/deployment"}
-
-[dependencies.pyo3]
-version = "*"
-features = ["auto-initialize"]
+rust-bert = {version="0.21.0", features=["download-libtorch"]}
+async-channel = "*"
+# [dependencies.pyo3]
+# version = "*"
+# features = ["auto-initialize"]
 
 
 [dev-dependencies]

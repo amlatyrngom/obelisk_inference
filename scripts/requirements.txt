@@ -1,5 +1,0 @@
---index-url https://download.pytorch.org/whl/cpu
-numpy
-pillow
-torch
-torchvision

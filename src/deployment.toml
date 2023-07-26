@@ -1,9 +1,22 @@
 namespace = "inference"
+dependencies = ["functional"]
 
-[functional]
+
+[[handlers]]
+name = "inferfn"
+subsystem = "functional"
 path = "inference::InferFn"
-mem_size = 4096
+mem = 1769
 timeout = 30
-concurrency = 10
-ephemeral = 2048
-caller_mem = 512
+scaleup = true
+ephemeral = 4096
+concurrency = 1
+
+[[handlers]]
+name = "benchfn"
+subsystem = "functional"
+path = "inference::BenchFn"
+mem = 512
+timeout = 30
+scaleup = false
+concurrency = 32
