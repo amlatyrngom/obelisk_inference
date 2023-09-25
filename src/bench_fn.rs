@@ -35,9 +35,9 @@ impl BenchFn {
                 if resp.is_err() {
                     continue;
                 }
-                let (resp, _) = resp.unwrap();
+                let (_resp, metadata) = resp.unwrap();
                 let end_time = std::time::Instant::now();
-                responses.push((end_time.duration_since(start_time), resp));
+                responses.push((end_time.duration_since(start_time), metadata));
                 break;
             }
         }
@@ -99,15 +99,26 @@ mod tests {
     }
 
     /// Write bench output.
-    async fn write_bench_output(points: Vec<(u64, f64, String)>, expt_name: &str) {
+    async fn write_bench_output(points: Vec<(u64, f64, Vec<u8>)>, expt_name: &str) {
         let expt_dir = "results/infer_bench";
         std::fs::create_dir_all(expt_dir).unwrap();
         let mut writer = csv::WriterBuilder::new()
             .from_path(format!("{expt_dir}/{expt_name}.csv"))
             .unwrap();
-        for (since, duration, mode) in points {
+        for (since, duration, metadata) in points {
+            let (mem, is_lambda): (i32, bool) = serde_json::from_slice(&metadata).unwrap();
+            let mode = if is_lambda {
+                "Lambda"
+            } else {
+                "ECS"
+            };
             writer
-                .write_record(&[since.to_string(), duration.to_string(), mode])
+                .write_record(&[
+                    since.to_string(),
+                    duration.to_string(),
+                    mem.to_string(),
+                    mode.to_string(),
+                ])
                 .unwrap();
         }
         writer.flush().unwrap();
@@ -141,7 +152,7 @@ mod tests {
             let meta = meta.clone();
             let payload = payload.clone();
             workers.push(tokio::spawn(async move {
-                let mut results: Vec<(u64, f64, String)> = Vec::new();
+                let mut results: Vec<(u64, f64, Vec<u8>)> = Vec::new();
                 let start_time = std::time::Instant::now();
                 loop {
                     // Pick an image at random.
@@ -158,23 +169,18 @@ mod tests {
                         continue;
                     }
                     let (resp, _) = resp.unwrap();
-                    let resp: Vec<(Duration, String)> = serde_json::from_str(&resp).unwrap();
+                    let resp: Vec<(Duration, Vec<u8>)> = serde_json::from_str(&resp).unwrap();
                     if n < 2 {
-                        println!("Worker {n}. Resp: {resp:?}.");
+                        println!("Worker {n}. Resp: {:?}.", resp.iter().map(|(d, _)| d.clone()).collect::<Vec<_>>());
                     }
-                    let infer_times: Vec<_> =
-                        resp.into_iter().map(|(x, _y)| x.as_secs_f64()).collect();
-                    if infer_times.is_empty() {
-                        continue;
-                    }
-                    for duration in &infer_times {
-                        results.push((since, *duration, "Infer".into()));
+                    for (duration, metadata) in &resp {
+                        results.push((since, duration.as_secs_f64(), metadata.clone()));
                     }
                     // Simulate lambda.
                     let end_time = std::time::Instant::now();
                     let mut active_time_ms =
                         end_time.duration_since(curr_time).as_secs_f64() * 1000.0;
-                    active_time_ms += BENCH_RTT * infer_times.len() as f64;
+                    active_time_ms += BENCH_RTT * resp.len() as f64;
                     println!("Active Time MS: {active_time_ms}.");
                     // Decide wait time.
                     let mut wait_time_ms = active_time_ms / activity - active_time_ms;
@@ -202,7 +208,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn full_bench_cloud() {
         let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
-        let duration_mins = 60.0;
+        let duration_mins = 1.0; // 60.0;
         run_bench(
             fc.clone(),
             RequestRate::Low,

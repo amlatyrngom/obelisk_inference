@@ -28,6 +28,7 @@ struct InferResp {
 #[derive(Clone)]
 pub struct InferFn {
     tx: mpsc::Sender<InferCmd>,
+    metadata: Vec<u8>,
 }
 
 #[async_trait::async_trait]
@@ -61,7 +62,12 @@ impl InferFn {
             let _ = Self::run_inferer(rx, done_tx, handle);
         });
         let _ = done_rx.await;
-        InferFn { tx }
+        let metadata = (
+            kit.instance_info.mem,
+            kit.instance_info.private_url.is_none(),
+        );
+        let metadata = serde_json::to_vec(&metadata).unwrap();
+        InferFn { tx, metadata }
     }
 
     /// Handle request.
@@ -70,7 +76,7 @@ impl InferFn {
         let cmd = InferCmd { resp_tx: tx, input };
         self.tx.send(cmd).await.unwrap();
         let answer = rx.await.unwrap();
-        (answer, vec![])
+        (answer, self.metadata.clone())
     }
 
     // fn get_bert_resource(subdir: &str) -> PathBuf {
