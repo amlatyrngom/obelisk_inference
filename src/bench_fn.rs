@@ -50,6 +50,8 @@ mod tests {
     use obelisk::FunctionalClient;
     use std::{sync::Arc, time::Duration};
 
+    const BENCH_RTT: f64 = 50.0;
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_simple_cloud() {
         let fc = Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(512)).await);
@@ -172,7 +174,7 @@ mod tests {
                     let end_time = std::time::Instant::now();
                     let mut active_time_ms =
                         end_time.duration_since(curr_time).as_secs_f64() * 1000.0;
-                    active_time_ms += 50.0 * infer_times.len() as f64;
+                    active_time_ms += BENCH_RTT * infer_times.len() as f64;
                     println!("Active Time MS: {active_time_ms}.");
                     // Decide wait time.
                     let mut wait_time_ms = active_time_ms / activity - active_time_ms;
@@ -200,7 +202,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn full_bench_cloud() {
         let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
-        let duration_mins = 30.0;
+        let duration_mins = 60.0;
         run_bench(
             fc.clone(),
             RequestRate::Low,
