@@ -1,5 +1,8 @@
 use obelisk::{FunctionalClient, HandlerKit, ScalingState, ServerlessHandler};
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 pub struct BenchFn {
     infer_client: Arc<FunctionalClient>,
@@ -45,17 +48,105 @@ impl BenchFn {
     }
 }
 
+struct RequestSender {
+    curr_avg_latency: f64,
+    desired_requests_per_second: f64,
+    fc: Arc<FunctionalClient>,
+}
+
+impl RequestSender {
+    // Next 5 seconds of requests
+    async fn send_request_window(&mut self) -> Vec<(Duration, Vec<u8>)> {
+        // Window duration.
+        let window_duration = 5.0;
+        let num_needed_threads = (self.desired_requests_per_second * self.curr_avg_latency).ceil();
+        let total_num_requests = window_duration * self.desired_requests_per_second;
+        let requests_per_thread = (total_num_requests / num_needed_threads).ceil();
+        let actual_total_num_requests = requests_per_thread * num_needed_threads;
+        let num_needed_threads = num_needed_threads as u64;
+        println!("NT={num_needed_threads}; RPT={requests_per_thread};");
+        let mut ts = Vec::new();
+        let overall_start_time = Instant::now();
+        for _ in 0..num_needed_threads {
+            let requests_per_thread = requests_per_thread as u64;
+            let fc = self.fc.clone();
+            let t = tokio::spawn(async move {
+                let start_time = std::time::Instant::now();
+                let mut responses = Vec::new();
+                let mut curr_idx = 0;
+                let req = (
+                    "This project's name is OBELISK.".to_string(),
+                    "What is this project's name?".to_string(),
+                );
+                let payload = serde_json::to_vec(&req).unwrap();
+                while curr_idx < requests_per_thread {
+                    // Find number of calls to make and update curr idx.
+                    let batch_size = 5;
+                    let call_count = if requests_per_thread - curr_idx < batch_size {
+                        requests_per_thread - curr_idx
+                    } else {
+                        batch_size
+                    };
+                    curr_idx += call_count;
+                    // Now send requests.
+                    let meta = call_count.to_string();
+                    let resp = fc.invoke(&meta, &payload).await;
+                    if resp.is_err() {
+                        println!("Err: {resp:?}");
+                        continue;
+                    }
+                    let (resp, _) = resp.unwrap();
+                    let mut resp: Vec<(Duration, Vec<u8>)> = serde_json::from_str(&resp).unwrap();
+                    responses.append(&mut resp);
+                }
+                let end_time = std::time::Instant::now();
+                let duration = end_time.duration_since(start_time);
+
+                (duration, responses)
+            });
+            ts.push(t);
+        }
+        let mut sum_duration = Duration::from_millis(0);
+        let mut all_responses = Vec::new();
+        for t in ts {
+            let (duration, mut responses) = t.await.unwrap();
+            sum_duration = sum_duration.checked_add(duration).unwrap();
+            all_responses.append(&mut responses);
+        }
+        let avg_duration = sum_duration.as_secs_f64() / (actual_total_num_requests);
+        self.curr_avg_latency = 0.9 * self.curr_avg_latency + 0.1 * avg_duration;
+        println!(
+            "AVG_LATENCY={avg_duration}; CURR_AVG_LATENCY={};",
+            self.curr_avg_latency
+        );
+        let overall_end_time = Instant::now();
+        let overall_duration = overall_end_time.duration_since(overall_start_time);
+        if overall_duration.as_secs_f64() < window_duration {
+            let sleep_duration =
+                Duration::from_secs_f64(window_duration - overall_duration.as_secs_f64());
+            println!("Window sleeping for: {:?}.", sleep_duration);
+            tokio::time::sleep(sleep_duration).await;
+        }
+        all_responses
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::RequestSender;
     use obelisk::FunctionalClient;
     use std::{sync::Arc, time::Duration};
 
     const BENCH_RTT: f64 = 50.0;
+    const STARTING_REQUEST_DURATION_SECS: f64 = 0.05;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_simple_cloud() {
         let fc = Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(512)).await);
-        let req = ("Amadou is boss.".to_string(), "Who is boss?".to_string());
+        let req = (
+            "This project's name is OBELISK.".to_string(),
+            "What is the name of this project?".to_string(),
+        );
         let meta = String::new();
         let payload = serde_json::to_vec(&req).unwrap();
         let (resp, _) = fc.invoke(&meta, &payload).await.unwrap();
@@ -107,11 +198,7 @@ mod tests {
             .unwrap();
         for (since, duration, metadata) in points {
             let (mem, is_lambda): (i32, bool) = serde_json::from_slice(&metadata).unwrap();
-            let mode = if is_lambda {
-                "Lambda"
-            } else {
-                "ECS"
-            };
+            let mode = if is_lambda { "Lambda" } else { "ECS" };
             writer
                 .write_record(&[
                     since.to_string(),
@@ -133,109 +220,93 @@ mod tests {
 
     async fn run_bench(
         fc: Arc<FunctionalClient>,
-        rate: RequestRate,
-        prefix: &str,
+        resquest_sender: &mut RequestSender,
+        name: &str,
         test_duration: Duration,
     ) {
-        let (activity, num_workers, calls_per_round) = match rate {
-            RequestRate::Low => (0.1, 1, 5),
-            RequestRate::Medium => (1.0, 1, 20),
-            RequestRate::High(num_workers) => (1.0, num_workers, 20),
-        };
-        let mut workers = Vec::new();
-        let req = ("Amadou is boss.".to_string(), "Who is boss?".to_string());
-        let meta = calls_per_round.to_string();
-        let payload = serde_json::to_vec(&req).unwrap();
-        for n in 0..num_workers {
-            let fc = fc.clone();
-            let test_duration = test_duration.clone();
-            let meta = meta.clone();
-            let payload = payload.clone();
-            workers.push(tokio::spawn(async move {
-                let mut results: Vec<(u64, f64, Vec<u8>)> = Vec::new();
-                let start_time = std::time::Instant::now();
-                loop {
-                    // Pick an image at random.
-                    // TODO: Find a better way to select images.
-                    let curr_time = std::time::Instant::now();
-                    let since = curr_time.duration_since(start_time);
-                    if since > test_duration {
-                        break;
-                    }
-                    let since = since.as_millis() as u64;
-                    let resp = fc.invoke(&meta, &payload).await;
-                    if resp.is_err() {
-                        println!("Err: {resp:?}");
-                        continue;
-                    }
-                    let (resp, _) = resp.unwrap();
-                    let resp: Vec<(Duration, Vec<u8>)> = serde_json::from_str(&resp).unwrap();
-                    if n < 2 {
-                        println!("Worker {n}. Resp: {:?}.", resp.iter().map(|(d, _)| d.clone()).collect::<Vec<_>>());
-                    }
-                    for (duration, metadata) in &resp {
-                        results.push((since, duration.as_secs_f64(), metadata.clone()));
-                    }
-                    // Simulate lambda.
-                    let end_time = std::time::Instant::now();
-                    let mut active_time_ms =
-                        end_time.duration_since(curr_time).as_secs_f64() * 1000.0;
-                    active_time_ms += BENCH_RTT * resp.len() as f64;
-                    println!("Active Time MS: {active_time_ms}.");
-                    // Decide wait time.
-                    let mut wait_time_ms = active_time_ms / activity - active_time_ms;
-                    if wait_time_ms > 30.0 * 1000.0 {
-                        wait_time_ms = 30.0 * 1000.0; // Prevent excessive waiting.
-                    }
-                    if wait_time_ms > 1.0 {
-                        let wait_time =
-                            std::time::Duration::from_millis(wait_time_ms.ceil() as u64);
-                        println!("Waiting {wait_time:?}.");
-                        tokio::time::sleep(wait_time).await;
-                    }
-                }
-                results
-            }));
+        let mut results: Vec<(u64, f64, Vec<u8>)> = Vec::new();
+        let start_time = std::time::Instant::now();
+        loop {
+            // Pick an image at random.
+            // TODO: Find a better way to select images.
+            let curr_time = std::time::Instant::now();
+            let since = curr_time.duration_since(start_time);
+            if since > test_duration {
+                break;
+            }
+            let since = since.as_millis() as u64;
+            let resp: Vec<(Duration, Vec<u8>)> = resquest_sender.send_request_window().await;
+            for (duration, metadata) in &resp {
+                results.push((since, duration.as_secs_f64(), metadata.clone()));
+            }
         }
-        let mut results = Vec::new();
-        for w in workers {
-            let mut r = w.await.unwrap();
-            results.append(&mut r);
-        }
-        write_bench_output(results, &format!("{prefix}_{rate:?}")).await;
+        write_bench_output(results, &format!("{name}")).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn full_bench_cloud() {
         let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
-        let duration_mins = 1.0; // 60.0;
+        let duration_mins = 1.0;
+        let low_req_per_secs = 1.0;
+        let medium_req_per_secs = 40.0;
+        let high_req_per_secs = 400.0;
+        let mut request_sender = RequestSender {
+            curr_avg_latency: STARTING_REQUEST_DURATION_SECS,
+            desired_requests_per_second: 0.0,
+            fc: fc.clone(),
+        };
+        // Low
+        request_sender.desired_requests_per_second = low_req_per_secs;
         run_bench(
             fc.clone(),
-            RequestRate::Low,
-            "pre",
+            &mut request_sender,
+            "pre_low",
             Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
+        // // Medium
+        request_sender.desired_requests_per_second = medium_req_per_secs;
         run_bench(
             fc.clone(),
-            RequestRate::Medium,
-            "pre",
+            &mut request_sender,
+            "pre_medium",
             Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
+        // High
+        request_sender.desired_requests_per_second = high_req_per_secs;
         run_bench(
             fc.clone(),
-            RequestRate::High(10),
-            "pre",
-            Duration::from_secs_f64(60.0 * duration_mins),
+            &mut request_sender,
+            "pre_high",
+            Duration::from_secs_f64(60.0 * 5.0),
         )
         .await;
-        run_bench(
-            fc.clone(),
-            RequestRate::Low,
-            "post",
-            Duration::from_secs_f64(60.0 * duration_mins),
-        )
-        .await;
+        // // Low again.
+        // request_sender.desired_requests_per_second = low_req_per_secs;
+        // run_bench(
+        //     fc.clone(),
+        //     &mut request_sender,
+        //     "post_low",
+        //     Duration::from_secs_f64(60.0 * duration_mins),
+        // )
+        // .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn full_dummy_bench_cloud() {
+        let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
+        // Low Mode
+        let desired_requests_per_second = 400.0;
+        let curr_avg_latency = STARTING_REQUEST_DURATION_SECS;
+        let mut request_sender = RequestSender {
+            curr_avg_latency,
+            desired_requests_per_second,
+            fc: fc.clone(),
+        };
+        for _ in 0..10 {
+            let responses = request_sender.send_request_window().await;
+            println!("Num Responses: {}", responses.len());
+        }
     }
 }

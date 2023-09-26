@@ -8,7 +8,7 @@ subsystem = "functional"
 path = "inference::InferFn"
 mem = 1769
 timeout = 30
-scaleup = 0.1
+scaleup = 0.5
 ephemeral = 4096
 concurrency = 1
 
