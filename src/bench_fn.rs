@@ -67,18 +67,17 @@ impl RequestSender {
         println!("NT={num_needed_threads}; RPT={requests_per_thread};");
         let mut ts = Vec::new();
         let overall_start_time = Instant::now();
+        let prompt = include_str!("prompt.json");
+        let req: (String, String) = serde_json::from_str(prompt).unwrap();
+        let payload = serde_json::to_vec(&req).unwrap();
         for _ in 0..num_needed_threads {
             let requests_per_thread = requests_per_thread as u64;
             let fc = self.fc.clone();
+            let payload = payload.clone();
             let t = tokio::spawn(async move {
                 let start_time = std::time::Instant::now();
                 let mut responses = Vec::new();
                 let mut curr_idx = 0;
-                let req = (
-                    "This project's name is OBELISK.".to_string(),
-                    "What is this project's name?".to_string(),
-                );
-                let payload = serde_json::to_vec(&req).unwrap();
                 while curr_idx < requests_per_thread {
                     // Find number of calls to make and update curr idx.
                     let batch_size = 5;
@@ -138,15 +137,13 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     const BENCH_RTT: f64 = 50.0;
-    const STARTING_REQUEST_DURATION_SECS: f64 = 0.05;
+    const STARTING_REQUEST_DURATION_SECS: f64 = 0.250;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_simple_cloud() {
         let fc = Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(512)).await);
-        let req = (
-            "This project's name is OBELISK.".to_string(),
-            "What is the name of this project?".to_string(),
-        );
+        let prompt = include_str!("prompt.json");
+        let req: (String, String) = serde_json::from_str(prompt).unwrap();
         let meta = String::new();
         let payload = serde_json::to_vec(&req).unwrap();
         let (resp, _) = fc.invoke(&meta, &payload).await.unwrap();
@@ -218,12 +215,7 @@ mod tests {
         High(usize),
     }
 
-    async fn run_bench(
-        fc: Arc<FunctionalClient>,
-        resquest_sender: &mut RequestSender,
-        name: &str,
-        test_duration: Duration,
-    ) {
+    async fn run_bench(resquest_sender: &mut RequestSender, name: &str, test_duration: Duration) {
         let mut results: Vec<(u64, f64, Vec<u8>)> = Vec::new();
         let start_time = std::time::Instant::now();
         loop {
@@ -246,10 +238,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn full_bench_cloud() {
         let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
-        let duration_mins = 1.0;
-        let low_req_per_secs = 1.0;
-        let medium_req_per_secs = 40.0;
-        let high_req_per_secs = 400.0;
+        let duration_mins = 30.0;
+        let low_req_per_secs = 0.2;
+        let medium_req_per_secs = 10.0;
+        let high_req_per_secs = 100.0;
         let mut request_sender = RequestSender {
             curr_avg_latency: STARTING_REQUEST_DURATION_SECS,
             desired_requests_per_second: 0.0,
@@ -258,16 +250,14 @@ mod tests {
         // Low
         request_sender.desired_requests_per_second = low_req_per_secs;
         run_bench(
-            fc.clone(),
             &mut request_sender,
             "pre_low",
             Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
-        // // Medium
+        // Medium
         request_sender.desired_requests_per_second = medium_req_per_secs;
         run_bench(
-            fc.clone(),
             &mut request_sender,
             "pre_medium",
             Duration::from_secs_f64(60.0 * duration_mins),
@@ -276,21 +266,19 @@ mod tests {
         // High
         request_sender.desired_requests_per_second = high_req_per_secs;
         run_bench(
-            fc.clone(),
             &mut request_sender,
             "pre_high",
-            Duration::from_secs_f64(60.0 * 5.0),
+            Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
-        // // Low again.
-        // request_sender.desired_requests_per_second = low_req_per_secs;
-        // run_bench(
-        //     fc.clone(),
-        //     &mut request_sender,
-        //     "post_low",
-        //     Duration::from_secs_f64(60.0 * duration_mins),
-        // )
-        // .await;
+        // Low again.
+        request_sender.desired_requests_per_second = low_req_per_secs;
+        run_bench(
+            &mut request_sender,
+            "post_low",
+            Duration::from_secs_f64(60.0 * duration_mins),
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
