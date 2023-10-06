@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+const USER_MEM: i32 = 512;
 
 pub struct BenchFn {
     infer_client: Arc<FunctionalClient>,
@@ -22,7 +23,7 @@ impl BenchFn {
     /// Create.
     pub async fn new(_kit: HandlerKit) -> Self {
         let infer_client =
-            Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(512)).await);
+            Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(USER_MEM)).await);
         BenchFn { infer_client }
     }
 
@@ -114,8 +115,14 @@ impl RequestSender {
         }
         let avg_duration = sum_duration.as_secs_f64() / (actual_total_num_requests);
         self.curr_avg_latency = 0.9 * self.curr_avg_latency + 0.1 * avg_duration;
+        let mut avg_req_latency = all_responses.iter().fold(Duration::from_secs(0), |acc, x| {
+            acc.checked_add(x.0.clone()).unwrap()
+        });
+        if all_responses.len() > 0 {
+            avg_req_latency = avg_req_latency.div_f64(all_responses.len() as f64);
+        }
         println!(
-            "AVG_LATENCY={avg_duration}; CURR_AVG_LATENCY={};",
+            "AVG_LATENCY={avg_duration}; CURR_AVG_LATENCY={}; REQ_LATENCY={avg_req_latency:?}",
             self.curr_avg_latency
         );
         let overall_end_time = Instant::now();
@@ -133,15 +140,16 @@ impl RequestSender {
 #[cfg(test)]
 mod tests {
     use super::RequestSender;
+    use super::USER_MEM;
     use obelisk::FunctionalClient;
     use std::{sync::Arc, time::Duration};
 
-    const BENCH_RTT: f64 = 50.0;
-    const STARTING_REQUEST_DURATION_SECS: f64 = 0.250;
+    const STARTING_REQUEST_DURATION_SECS: f64 = 0.200;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_simple_cloud() {
-        let fc = Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(512)).await);
+        let fc =
+            Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(USER_MEM)).await);
         let prompt = include_str!("prompt.json");
         let req: (String, String) = serde_json::from_str(prompt).unwrap();
         let meta = String::new();
@@ -152,7 +160,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_scaling_cloud() {
-        let fc = Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(512)).await);
+        let fc =
+            Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(USER_MEM)).await);
         let req = ("Amadou is boss.".to_string(), "Who is boss?".to_string());
         let meta = String::new();
         let payload = serde_json::to_vec(&req).unwrap();
@@ -177,7 +186,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_bench_cloud() {
-        let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
+        let fc =
+            Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
         let req = ("Amadou is boss.".to_string(), "Who is boss?".to_string());
         let meta = String::new();
         let payload = serde_json::to_vec(&req).unwrap();
@@ -237,11 +247,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn full_bench_cloud() {
-        let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
-        let duration_mins = 30.0;
-        let low_req_per_secs = 0.2;
-        let medium_req_per_secs = 10.0;
-        let high_req_per_secs = 100.0;
+        let fc =
+            Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
+        let duration_mins = 15.0;
+        let low_req_per_secs = 0.5;
+        let medium_req_per_secs = 5.0;
+        let high_req_per_secs = 50.0;
         let mut request_sender = RequestSender {
             curr_avg_latency: STARTING_REQUEST_DURATION_SECS,
             desired_requests_per_second: 0.0,
@@ -283,7 +294,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn full_dummy_bench_cloud() {
-        let fc = Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(512)).await);
+        let fc =
+            Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
         // Low Mode
         let desired_requests_per_second = 400.0;
         let curr_avg_latency = STARTING_REQUEST_DURATION_SECS;

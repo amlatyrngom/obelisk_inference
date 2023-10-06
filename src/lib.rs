@@ -74,8 +74,15 @@ impl InferFn {
     async fn handle_req(&self, input: (String, String)) -> (String, Vec<u8>) {
         let (tx, rx) = oneshot::channel();
         let cmd = InferCmd { resp_tx: tx, input };
-        self.tx.send(cmd).await.unwrap();
-        let answer = rx.await.unwrap();
+        // Hacky fix.
+        let res = self.tx.send(cmd).await;
+        let answer = if res.is_ok() {
+            let answer = rx.await.unwrap();
+            answer
+        } else {
+            println!("InfererExit: Something went wrong!");
+            std::process::exit(1);
+        };
         (answer, self.metadata.clone())
     }
 
@@ -132,7 +139,7 @@ impl InferFn {
             let cmd = match cmd {
                 None => {
                     println!("Inferer Stopped!");
-                    return Ok(());
+                    break;
                 }
                 Some(cmd) => cmd,
             };
@@ -174,12 +181,14 @@ impl InferFn {
             // println!("Run code. Duration: {duration:?}");
             // let start_time = std::time::Instant::now();
             for (tx, res) in txs.into_iter().zip(results) {
-                tx.send(res).unwrap();
+                let _ = tx.send(res);
             }
             let end_time = std::time::Instant::now();
             let duration = end_time.duration_since(start_time);
             println!("Respond. Duration: {duration:?}");
         }
+        println!("Exiting inferer!");
+        return Ok(());
     }
 }
 
