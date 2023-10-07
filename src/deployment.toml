@@ -6,9 +6,9 @@ dependencies = ["functional"]
 name = "inferfn"
 subsystem = "functional"
 path = "inference::InferFn"
-mem = 1769
+mem = 768
 timeout = 30
-scaleup = 0.0
+scaleup = 0.5
 ephemeral = 4096
 concurrency = 1
 

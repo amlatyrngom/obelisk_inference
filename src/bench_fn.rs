@@ -69,7 +69,7 @@ impl RequestSender {
         let mut ts = Vec::new();
         let overall_start_time = Instant::now();
         let prompt = include_str!("prompt.json");
-        let req: (String, String) = serde_json::from_str(prompt).unwrap();
+        let req: Vec<String> = serde_json::from_str(prompt).unwrap();
         let payload = serde_json::to_vec(&req).unwrap();
         for _ in 0..num_needed_threads {
             let requests_per_thread = requests_per_thread as u64;
@@ -151,11 +151,11 @@ mod tests {
         let fc =
             Arc::new(FunctionalClient::new("inference", "inferfn", None, Some(USER_MEM)).await);
         let prompt = include_str!("prompt.json");
-        let req: (String, String) = serde_json::from_str(prompt).unwrap();
+        let req: Vec<String> = serde_json::from_str(prompt).unwrap();
         let meta = String::new();
         let payload = serde_json::to_vec(&req).unwrap();
         let (resp, _) = fc.invoke(&meta, &payload).await.unwrap();
-        println!("Infer Resp: {resp:?}");
+        println!("Infer Resp: {:?}", resp.len());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -258,14 +258,14 @@ mod tests {
             desired_requests_per_second: 0.0,
             fc: fc.clone(),
         };
-        // Low
-        request_sender.desired_requests_per_second = low_req_per_secs;
-        run_bench(
-            &mut request_sender,
-            "pre_low",
-            Duration::from_secs_f64(60.0 * duration_mins),
-        )
-        .await;
+        // // Low
+        // request_sender.desired_requests_per_second = low_req_per_secs;
+        // run_bench(
+        //     &mut request_sender,
+        //     "pre_low",
+        //     Duration::from_secs_f64(60.0 * duration_mins),
+        // )
+        // .await;
         // // Medium
         request_sender.desired_requests_per_second = medium_req_per_secs;
         run_bench(
@@ -274,22 +274,22 @@ mod tests {
             Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
-        // High
-        request_sender.desired_requests_per_second = high_req_per_secs;
-        run_bench(
-            &mut request_sender,
-            "pre_high",
-            Duration::from_secs_f64(60.0 * duration_mins),
-        )
-        .await;
-        // Low again.
-        request_sender.desired_requests_per_second = low_req_per_secs;
-        run_bench(
-            &mut request_sender,
-            "post_low",
-            Duration::from_secs_f64(60.0 * duration_mins),
-        )
-        .await;
+        // // High
+        // request_sender.desired_requests_per_second = high_req_per_secs;
+        // run_bench(
+        //     &mut request_sender,
+        //     "pre_high",
+        //     Duration::from_secs_f64(60.0 * duration_mins),
+        // )
+        // .await;
+        // // Low again.
+        // request_sender.desired_requests_per_second = low_req_per_secs;
+        // run_bench(
+        //     &mut request_sender,
+        //     "post_low",
+        //     Duration::from_secs_f64(60.0 * duration_mins),
+        // )
+        // .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]

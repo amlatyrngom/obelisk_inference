@@ -93,16 +93,15 @@ impl InferFn {
     }
 
     /// Handle request.
-    async fn handle_req(&self, input: (String, String)) -> (String, Vec<u8>) {
+    async fn handle_req(&self, inputs: Vec<String>) -> (String, Vec<u8>) {
         // let (tx, rx) = oneshot::channel();
-        println!("Request Received: {input:?}");
+        println!("Request Received. Input length: {}", inputs.len());
         // let cmd = InferCmd { resp_tx: tx, input };
         // Hacky fix.
         // let res = self.tx.send(cmd).await;
         let start_time = std::time::Instant::now();
         let answer = {
             let model = self.model.lock().await;
-            let inputs: Vec<String> = vec![input.0];
             let resp = tokio::task::block_in_place(|| model.encode(&inputs).unwrap_or(Vec::new()));
             resp.first().cloned().unwrap_or(Vec::new())
         };
@@ -261,14 +260,12 @@ mod tests {
         // let context = "This text, from Amadou, is not very hard to translate.".to_string();
         // let question = "Who is the text from?".to_string();
         // let input = (context, question);
-        let input = "John Adams was an American statesman and founding father.".to_string();
-        let dummy = "".to_string();
-        let input = (input, dummy);
-        let (answer, _) = inferfn.handle_req(input.clone()).await;
-        println!("Answer: {answer:?}.");
-        let (answer, _) = inferfn.handle_req(input.clone()).await;
-        println!("Answer: {answer:?}.");
-
+        let inputs = include_str!("prompt.json");
+        let inputs: Vec<String> = serde_json::from_str(inputs).unwrap();
+        let (answer, _) = inferfn.handle_req(inputs.clone()).await;
+        println!("Answer: {}.", answer.len());
+        let (answer, _) = inferfn.handle_req(inputs.clone()).await;
+        println!("Answer: {}.", answer.len());
         // inferfn.tx;
     }
 }
