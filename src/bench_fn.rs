@@ -250,9 +250,9 @@ mod tests {
         let fc =
             Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
         let duration_mins = 15.0;
-        let low_req_per_secs = 0.5;
-        let medium_req_per_secs = 5.0;
-        let high_req_per_secs = 50.0;
+        let low_req_per_secs = 1.0;
+        let medium_req_per_secs = 20.0;
+        let high_req_per_secs = 200.0;
         let mut request_sender = RequestSender {
             curr_avg_latency: STARTING_REQUEST_DURATION_SECS,
             desired_requests_per_second: 0.0,
@@ -266,7 +266,7 @@ mod tests {
             Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
-        // Medium
+        // // Medium
         request_sender.desired_requests_per_second = medium_req_per_secs;
         run_bench(
             &mut request_sender,

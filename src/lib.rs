@@ -2,6 +2,10 @@
 use rust_bert::pipelines::question_answering::{
     QaInput, QuestionAnsweringConfig, QuestionAnsweringModel,
 };
+use rust_bert::pipelines::sentence_embeddings::{
+    SentenceEmbeddingsBuilder, SentenceEmbeddingsModel, SentenceEmbeddingsModelType,
+};
+
 // use rust_bert::resources::{LocalResource, RemoteResource, ResourceProvider};
 // use std::path::PathBuf;
 use std::time::Instant;
@@ -9,8 +13,9 @@ use std::time::Instant;
 use obelisk::{HandlerKit, ScalingState, ServerlessHandler};
 use serde::{Deserialize, Serialize};
 // use std::any::Any;
+use std::sync::Arc;
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 mod bench_fn;
 pub use bench_fn::BenchFn;
 
@@ -29,6 +34,7 @@ struct InferResp {
 pub struct InferFn {
     tx: mpsc::Sender<InferCmd>,
     metadata: Vec<u8>,
+    model: Arc<Mutex<SentenceEmbeddingsModel>>,
 }
 
 #[async_trait::async_trait]
@@ -56,33 +62,54 @@ impl InferFn {
         //     });
         //     let _ = done_rx.await;
         // }
-        let handle = Handle::current();
-        let (done_tx, done_rx) = oneshot::channel();
-        tokio::task::spawn_blocking(move || {
-            let _ = Self::run_inferer(rx, done_tx, handle);
-        });
-        let _ = done_rx.await;
+        // let handle = Handle::current();
+        // let (done_tx, done_rx) = oneshot::channel();
+        // tokio::task::spawn_blocking(move || {
+        //     let _ = Self::run_inferer(rx, done_tx, handle);
+        // });
+        // let _ = done_rx.await;
         let metadata = (
             kit.instance_info.mem,
             kit.instance_info.private_url.is_none(),
         );
         let metadata = serde_json::to_vec(&metadata).unwrap();
-        InferFn { tx, metadata }
+        // Make model.
+        let local_data_dir = obelisk::common::local_storage_path();
+        let cache_dir = format!("{local_data_dir}/rustbert");
+        std::env::set_var("RUSTBERT_CACHE", cache_dir);
+        println!("Making default config!");
+        let model = tokio::task::block_in_place(|| {
+            let model =
+                SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL12V2)
+                    .create_model()
+                    .unwrap();
+            Arc::new(Mutex::new(model))
+        });
+        InferFn {
+            tx,
+            metadata,
+            model,
+        }
     }
 
     /// Handle request.
     async fn handle_req(&self, input: (String, String)) -> (String, Vec<u8>) {
-        let (tx, rx) = oneshot::channel();
-        let cmd = InferCmd { resp_tx: tx, input };
+        // let (tx, rx) = oneshot::channel();
+        println!("Request Received: {input:?}");
+        // let cmd = InferCmd { resp_tx: tx, input };
         // Hacky fix.
-        let res = self.tx.send(cmd).await;
-        let answer = if res.is_ok() {
-            let answer = rx.await.unwrap();
-            answer
-        } else {
-            println!("InfererExit: Something went wrong!");
-            std::process::exit(1);
+        // let res = self.tx.send(cmd).await;
+        let start_time = std::time::Instant::now();
+        let answer = {
+            let model = self.model.lock().await;
+            let inputs: Vec<String> = vec![input.0];
+            let resp = tokio::task::block_in_place(|| model.encode(&inputs).unwrap_or(Vec::new()));
+            resp.first().cloned().unwrap_or(Vec::new())
         };
+        let end_time = std::time::Instant::now();
+        let answer = serde_json::to_string(&answer).unwrap();
+        let duration = end_time.duration_since(start_time);
+        println!("Inference duration: {duration:?}");
         (answer, self.metadata.clone())
     }
 
@@ -100,96 +127,102 @@ impl InferFn {
     //     panic!("Cannot find resource");
     // }
 
-    /// Run inferer.
-    fn run_inferer(
-        rx: mpsc::Receiver<InferCmd>,
-        done_tx: oneshot::Sender<()>,
-        handle: Handle,
-    ) -> Result<(), String> {
-        let mut rx = rx;
-        let local_data_dir = obelisk::common::local_storage_path();
-        let cache_dir = format!("{local_data_dir}/rustbert");
-        std::env::set_var("RUSTBERT_CACHE", cache_dir);
-        println!("Making default config!");
-        // It is faster to just download the models.
-        // So just use the default config.
-        let config = QuestionAnsweringConfig::default();
-        // config.model_resource = ModelResource::Torch(Box::new(LocalResource {
-        //     local_path: Self::get_bert_resource("model"),
-        // }));
-        // config.vocab_resource = Box::new(LocalResource {
-        //     local_path: Self::get_bert_resource("vocab"),
-        // });
-        // config.config_resource = Box::new(LocalResource {
-        //     local_path: Self::get_bert_resource("config"),
-        // });
-        // let translation_model = TranslationModelBuilder::new()
-        //     .with_source_languages(vec![Language::English])
-        //     .with_target_languages(vec![Language::French])
-        //     .create_model().unwrap();
-        let qa_model = QuestionAnsweringModel::new(config).unwrap();
-        let _ = done_tx.send(());
-        loop {
-            // let start_time = std::time::Instant::now();
-            let mut inputs = Vec::new();
-            let mut txs = Vec::new();
-            println!("Inferer loop running!");
-            // Read first cmd.
-            let cmd = handle.block_on(rx.recv());
-            let cmd = match cmd {
-                None => {
-                    println!("Inferer Stopped!");
-                    break;
-                }
-                Some(cmd) => cmd,
-            };
-            let start_time = Instant::now();
-            inputs.push(QaInput {
-                context: cmd.input.0,
-                question: cmd.input.1,
-            });
-            txs.push(cmd.resp_tx);
-            // Read all pending commands into a batch.
-            loop {
-                let cmd = rx.try_recv();
-                if let Ok(cmd) = cmd {
-                    inputs.push(QaInput {
-                        context: cmd.input.0,
-                        question: cmd.input.1,
-                    });
-                    txs.push(cmd.resp_tx);
-                } else {
-                    break;
-                }
-            }
+    // /// Run inferer.
+    // fn run_inferer(
+    //     rx: mpsc::Receiver<InferCmd>,
+    //     done_tx: oneshot::Sender<()>,
+    //     handle: Handle,
+    // ) -> Result<(), String> {
+    //     let mut rx = rx;
+    //     let local_data_dir = obelisk::common::local_storage_path();
+    //     let cache_dir = format!("{local_data_dir}/rustbert");
+    //     std::env::set_var("RUSTBERT_CACHE", cache_dir);
+    //     println!("Making default config!");
+    //     // It is faster to just download the models.
+    //     // So just use the default config.
+    //     // let config = QuestionAnsweringConfig::default();
+    //     // config.model_resource = ModelResource::Torch(Box::new(LocalResource {
+    //     //     local_path: Self::get_bert_resource("model"),
+    //     // }));
+    //     // config.vocab_resource = Box::new(LocalResource {
+    //     //     local_path: Self::get_bert_resource("vocab"),
+    //     // });
+    //     // config.config_resource = Box::new(LocalResource {
+    //     //     local_path: Self::get_bert_resource("config"),
+    //     // });
+    //     // let translation_model = TranslationModelBuilder::new()
+    //     //     .with_source_languages(vec![Language::English])
+    //     //     .with_target_languages(vec![Language::French])
+    //     //     .create_model().unwrap();
+    //     let embedding_model = SentenceEmbeddingsBuilder::remote(
+    //         SentenceEmbeddingsModelType::AllMiniLmL12V2
+    //     ).create_model().unwrap();
 
-            // let end_time = std::time::Instant::now();
-            // let duration = end_time.duration_since(start_time);
-            // println!("Read Inputs. Duration: {duration:?}");
-            // let start_time = std::time::Instant::now();
-            // let results = translation_model
-            //     .translate(&texts, Language::English, Language::French)
-            //     .unwrap();
-            let results = qa_model
-                .predict(&inputs, 1, 32)
-                .into_iter()
-                .map(|answers| answers.first().map_or(String::new(), |a| a.answer.clone()))
-                .collect::<Vec<_>>();
-            println!("Inferer loop found: {results:?}!");
-            // let end_time = std::time::Instant::now();
-            // let duration = end_time.duration_since(start_time);
-            // println!("Run code. Duration: {duration:?}");
-            // let start_time = std::time::Instant::now();
-            for (tx, res) in txs.into_iter().zip(results) {
-                let _ = tx.send(res);
-            }
-            let end_time = std::time::Instant::now();
-            let duration = end_time.duration_since(start_time);
-            println!("Respond. Duration: {duration:?}");
-        }
-        println!("Exiting inferer!");
-        return Ok(());
-    }
+    //     // let qa_model = QuestionAnsweringModel::new(config).unwrap();
+    //     let _ = done_tx.send(());
+    //     loop {
+    //         // let start_time = std::time::Instant::now();
+    //         let mut inputs = Vec::new();
+    //         let mut txs = Vec::new();
+    //         println!("Inferer loop running!");
+    //         // Read first cmd.
+    //         let cmd = handle.block_on(rx.recv());
+    //         let cmd = match cmd {
+    //             None => {
+    //                 println!("Inferer Stopped!");
+    //                 break;
+    //             }
+    //             Some(cmd) => cmd,
+    //         };
+    //         let start_time = Instant::now();
+    //         // inputs.push(QaInput {
+    //         //     context: cmd.input.0,
+    //         //     question: cmd.input.1,
+    //         // });
+    //         inputs.push(cmd.input.0);
+    //         txs.push(cmd.resp_tx);
+    //         // // Read all pending commands into a batch.
+    //         // loop {
+    //         //     let cmd = rx.try_recv();
+    //         //     if let Ok(cmd) = cmd {
+    //         //         // inputs.push(QaInput {
+    //         //         //     context: cmd.input.0,
+    //         //         //     question: cmd.input.1,
+    //         //         // });
+    //         //         inputs.push(cmd.input.0);
+    //         //         txs.push(cmd.resp_tx);
+    //         //     } else {
+    //         //         break;
+    //         //     }
+    //         // }
+
+    //         // let end_time = std::time::Instant::now();
+    //         // let duration = end_time.duration_since(start_time);
+    //         // println!("Read Inputs. Duration: {duration:?}");
+    //         // let start_time = std::time::Instant::now();
+    //         // let results = translation_model
+    //         //     .translate(&texts, Language::English, Language::French)
+    //         //     .unwrap();
+    //         let results = qa_model
+    //             .predict(&inputs, 1, 32)
+    //             .into_iter()
+    //             .map(|answers| answers.first().map_or(String::new(), |a| a.answer.clone()))
+    //             .collect::<Vec<_>>();
+    //         println!("Inferer loop found: {results:?}!");
+    //         // let end_time = std::time::Instant::now();
+    //         // let duration = end_time.duration_since(start_time);
+    //         // println!("Run code. Duration: {duration:?}");
+    //         // let start_time = std::time::Instant::now();
+    //         for (tx, res) in txs.into_iter().zip(results) {
+    //             let _ = tx.send(res);
+    //         }
+    //         let end_time = std::time::Instant::now();
+    //         let duration = end_time.duration_since(start_time);
+    //         println!("Request-Respond. Duration: {duration:?}");
+    //     }
+    //     println!("Exiting inferer!");
+    //     return Ok(());
+    // }
 }
 
 #[cfg(test)]
@@ -225,9 +258,12 @@ mod tests {
     async fn test_infer_fn() {
         let kit = dummy_kit();
         let inferfn = InferFn::new(kit).await;
-        let context = "This text, from Amadou, is not very hard to translate.".to_string();
-        let question = "Who is the text from?".to_string();
-        let input = (context, question);
+        // let context = "This text, from Amadou, is not very hard to translate.".to_string();
+        // let question = "Who is the text from?".to_string();
+        // let input = (context, question);
+        let input = "John Adams was an American statesman and founding father.".to_string();
+        let dummy = "".to_string();
+        let input = (input, dummy);
         let (answer, _) = inferfn.handle_req(input.clone()).await;
         println!("Answer: {answer:?}.");
         let (answer, _) = inferfn.handle_req(input.clone()).await;
