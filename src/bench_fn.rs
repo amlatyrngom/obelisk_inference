@@ -251,22 +251,22 @@ mod tests {
             Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
         let duration_mins = 15.0;
         let low_req_per_secs = 1.0;
-        let medium_req_per_secs = 20.0;
-        let high_req_per_secs = 200.0;
+        let medium_req_per_secs = 10.0;
+        let high_req_per_secs = 100.0;
         let mut request_sender = RequestSender {
             curr_avg_latency: STARTING_REQUEST_DURATION_SECS,
             desired_requests_per_second: 0.0,
             fc: fc.clone(),
         };
-        // // Low
-        // request_sender.desired_requests_per_second = low_req_per_secs;
-        // run_bench(
-        //     &mut request_sender,
-        //     "pre_low",
-        //     Duration::from_secs_f64(60.0 * duration_mins),
-        // )
-        // .await;
-        // // Medium
+        // Low
+        request_sender.desired_requests_per_second = low_req_per_secs;
+        run_bench(
+            &mut request_sender,
+            "pre_low",
+            Duration::from_secs_f64(60.0 * duration_mins),
+        )
+        .await;
+        // Medium
         request_sender.desired_requests_per_second = medium_req_per_secs;
         run_bench(
             &mut request_sender,
@@ -274,22 +274,22 @@ mod tests {
             Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
-        // // High
-        // request_sender.desired_requests_per_second = high_req_per_secs;
-        // run_bench(
-        //     &mut request_sender,
-        //     "pre_high",
-        //     Duration::from_secs_f64(60.0 * duration_mins),
-        // )
-        // .await;
-        // // Low again.
-        // request_sender.desired_requests_per_second = low_req_per_secs;
-        // run_bench(
-        //     &mut request_sender,
-        //     "post_low",
-        //     Duration::from_secs_f64(60.0 * duration_mins),
-        // )
-        // .await;
+        // High
+        request_sender.desired_requests_per_second = high_req_per_secs;
+        run_bench(
+            &mut request_sender,
+            "pre_high",
+            Duration::from_secs_f64(60.0 * duration_mins),
+        )
+        .await;
+        // Low again.
+        request_sender.desired_requests_per_second = low_req_per_secs;
+        run_bench(
+            &mut request_sender,
+            "post_low",
+            Duration::from_secs_f64(60.0 * duration_mins),
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
