@@ -13,6 +13,9 @@ obelisk = {path="./obelisk"}
 obelisk_deployment = {package="deployment", path="./obelisk/deployment"}
 rust-bert = {version="0.21.0", features=["download-libtorch"]}
 async-channel = "*"
+chrono = {version="*", features=["serde"]}
+bincode = "*"
+
 # [dependencies.pyo3]
 # version = "*"
 # features = ["auto-initialize"]

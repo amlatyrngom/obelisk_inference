@@ -141,6 +141,8 @@ impl RequestSender {
 mod tests {
     use super::RequestSender;
     use super::USER_MEM;
+    use obelisk::common::{scaling_state::ScalingStateManager, MetricsManager};
+    use obelisk::functional::rescaler::FunctionalScalingInfo;
     use obelisk::FunctionalClient;
     use std::{sync::Arc, time::Duration};
 
@@ -156,6 +158,66 @@ mod tests {
         let payload = serde_json::to_vec(&req).unwrap();
         let (resp, _) = fc.invoke(&meta, &payload).await.unwrap();
         println!("Infer Resp: {:?}", resp.len());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_set_forced_deployment() {
+        set_forced_deployment(5.0 * 60.0, 4096, 5, "inference", "inferfn")
+            .await
+            .unwrap();
+    }
+
+    async fn set_forced_deployment(
+        duration_secs: f64,
+        forced_mem: i32,
+        forced_scale: i32,
+        namespace: &str,
+        name: &str,
+    ) -> Result<(), String> {
+        let now = chrono::Utc::now();
+        let expiry_time = now + chrono::Duration::seconds(duration_secs as i64);
+        let forced_deployment = (expiry_time, forced_mem, forced_scale);
+        let forced_deployment = bincode::serialize(&forced_deployment).unwrap();
+        let mm = MetricsManager::new("functional", namespace, name).await;
+        mm.accumulate_metric(forced_deployment).await;
+        mm.push_metrics().await.unwrap();
+        let sm = ScalingStateManager::new("functional", namespace, name).await;
+        sm.start_rescaling_thread().await;
+        for _ in 0..10 {
+            match sm.retrieve_scaling_state().await {
+                Err(x) => {
+                    println!("Error: {x:?}. Retrying...");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+                Ok(x) => {
+                    let scaling_info = x.handler_state.unwrap().scaling_info;
+                    if scaling_info.is_none() {
+                        println!("Scaling info not set. Retrying...");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    let scaling_info = scaling_info.unwrap();
+                    let scaling_info: FunctionalScalingInfo =
+                        serde_json::from_str(&scaling_info).unwrap();
+                    let forced_deployment = scaling_info.forced_deployment;
+                    if forced_deployment.is_none() {
+                        println!("Forced deployment not set. Retrying...");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    let forced_deployment = forced_deployment.unwrap();
+                    if forced_deployment.0 != expiry_time {
+                        println!("Forced deployment corret expiry time not set. Retrying...");
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                    println!("Forced deployment set: {:?}.", forced_deployment);
+                    return Ok(());
+                }
+            }
+        }
+        Err("Could not set forced deployment.".to_string())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -184,17 +246,17 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_bench_cloud() {
-        let fc =
-            Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
-        let req = ("Amadou is boss.".to_string(), "Who is boss?".to_string());
-        let meta = String::new();
-        let payload = serde_json::to_vec(&req).unwrap();
-        let (resp, _) = fc.invoke(&meta, &payload).await.unwrap();
-        let resp: Vec<(Duration, String)> = serde_json::from_str(&resp).unwrap();
-        println!("Infer Resp: {resp:?}");
-    }
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    // async fn test_bench_cloud() {
+    //     let fc =
+    //         Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
+    //     let req = ("Amadou is boss.".to_string(), "Who is boss?".to_string());
+    //     let meta = String::new();
+    //     let payload = serde_json::to_vec(&req).unwrap();
+    //     let (resp, _) = fc.invoke(&meta, &payload).await.unwrap();
+    //     let resp: Vec<(Duration, String)> = serde_json::from_str(&resp).unwrap();
+    //     println!("Infer Resp: {resp:?}");
+    // }
 
     /// Write bench output.
     async fn write_bench_output(points: Vec<(u64, f64, Vec<u8>)>, expt_name: &str) {
@@ -247,6 +309,18 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn full_bench_cloud() {
+        let set_force = true;
+        if set_force {
+            // Time upper bound: 1 hour 10 minutes.
+            let time_upper_bound = 60.0 * 60.0 + 10.0 * 60.0;
+            let forced_mem = 4096;
+            let forced_scale = 4;
+            set_forced_deployment(time_upper_bound, forced_mem, forced_scale, "inference", "benchfn")
+                .await
+                .unwrap();
+
+        }
+
         let fc =
             Arc::new(FunctionalClient::new("inference", "benchfn", None, Some(USER_MEM)).await);
         let duration_mins = 15.0;
@@ -266,30 +340,30 @@ mod tests {
             Duration::from_secs_f64(60.0 * duration_mins),
         )
         .await;
-        // Medium
-        request_sender.desired_requests_per_second = medium_req_per_secs;
-        run_bench(
-            &mut request_sender,
-            "pre_medium",
-            Duration::from_secs_f64(60.0 * duration_mins),
-        )
-        .await;
-        // High
-        request_sender.desired_requests_per_second = high_req_per_secs;
-        run_bench(
-            &mut request_sender,
-            "pre_high",
-            Duration::from_secs_f64(60.0 * duration_mins),
-        )
-        .await;
-        // Low again.
-        request_sender.desired_requests_per_second = low_req_per_secs;
-        run_bench(
-            &mut request_sender,
-            "post_low",
-            Duration::from_secs_f64(60.0 * duration_mins),
-        )
-        .await;
+        // // Medium
+        // request_sender.desired_requests_per_second = medium_req_per_secs;
+        // run_bench(
+        //     &mut request_sender,
+        //     "pre_medium",
+        //     Duration::from_secs_f64(60.0 * duration_mins),
+        // )
+        // .await;
+        // // High
+        // request_sender.desired_requests_per_second = high_req_per_secs;
+        // run_bench(
+        //     &mut request_sender,
+        //     "pre_high",
+        //     Duration::from_secs_f64(60.0 * duration_mins),
+        // )
+        // .await;
+        // // Low again.
+        // request_sender.desired_requests_per_second = low_req_per_secs;
+        // run_bench(
+        //     &mut request_sender,
+        //     "post_low",
+        //     Duration::from_secs_f64(60.0 * duration_mins),
+        // )
+        // .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]

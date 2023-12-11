@@ -1714,6 +1714,8 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "async-trait",
+ "bincode",
+ "chrono",
  "csv",
  "deployment",
  "obelisk",
@@ -1909,6 +1911,8 @@ name = "microbench"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bincode",
+ "chrono",
  "common",
  "functional",
  "persistence",
